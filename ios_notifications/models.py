@@ -8,6 +8,7 @@ from binascii import hexlify, unhexlify
 
 from django.db import models
 from django.conf import settings
+from django.utils.functional import cached_property
 
 try:
     from django.utils.timezone import now as dt_now
@@ -365,6 +366,39 @@ class Device(models.Model):
 
         notification.service.push_notification_to_devices(notification, [self])
 
+    @cached_property
+    def settings_dict(self):
+        settings = self.settings.all().select_related("app_setting")
+
+        return {s.app_setting.slug: s for s in settings}
+
+    def update_device_settings(self, new_settings):
+        for slug, value in new_settings.iteritems():
+            setting = self.settings_dict.get(slug)
+
+            if not setting:
+                try:
+                    app_setting = AppSetting.objects.get(service=self.service, slug=slug)
+
+                    setting = DeviceSetting()
+                    setting.app_setting = app_setting
+                except AppSetting.DoesNotExist:
+                    client = Client(dsn=settings.RAVEN_CONFIG['dsn'])
+                    client.captureMessage(
+                        "Invalid setting.  Does not exist for this app.",
+                        extra={
+                            "token": self.token,
+                            "invalid_setting": {
+                                slug: value,
+                            },
+                        }
+                    )
+                    continue
+
+            setting.device = self
+            setting.value = value
+            setting.save()
+
     def __unicode__(self):
         return self.token
 
@@ -418,3 +452,77 @@ class FeedbackService(BaseService):
 
     class Meta:
         unique_together = ('name', 'hostname')
+
+
+class AppSetting(models.Model):
+    DATA_TYPE_BOOLEAN = 'boolean'
+    DATA_TYPE_STRING = 'string'
+
+    DATA_TYPE_CHOICES = (
+        (DATA_TYPE_BOOLEAN, 'Boolean'),
+        (DATA_TYPE_STRING, 'String'),
+    )
+
+    service = models.ForeignKey(APNService)
+    slug = models.SlugField(max_length=100)
+    data_type = models.CharField(max_length=30, choices=DATA_TYPE_CHOICES)
+
+    @property
+    def is_boolean(self):
+        return self.data_type == AppSetting.DATA_TYPE_BOOLEAN
+
+    @property
+    def is_string(self):
+        return self.data_type == AppSetting.DATA_TYPE_STRING
+
+    class Meta:
+        unique_together = ('service', 'slug')
+
+    def __unicode__(self):
+        return self.slug
+
+class DeviceSetting(models.Model):
+    VALID_TRUE_VALUES = ["true", "1", "yes"]
+    VALID_FALSE_VALUES = ["false", "0", "no"]
+
+    app_setting = models.ForeignKey(AppSetting)
+    device = models.ForeignKey(Device, related_name="settings")
+    raw_value = models.CharField(max_length=500)
+
+    @property
+    def value(self):
+        return_value = json.loads(self.raw_value)
+
+        if self.app_setting.is_boolean:
+            return return_value
+        elif self.app_setting.is_string:
+            return return_value
+        else:
+            raise NotImplementedError("Type `{}` not implemented".format(self.data_type))
+
+    @value.setter
+    def value(self, new_value):
+        if self.app_setting.is_boolean:
+            if not isinstance(new_value, bool):
+                if new_value.lower() in DeviceSetting.VALID_TRUE_VALUES:
+                    new_value = True
+                elif new_value.lower() in DeviceSetting.VALID_FALSE_VALUES:
+                    new_value = False
+                else:
+                    raise ValueError("Invalid boolean")
+        elif self.app_setting.is_string:
+            if not isinstance(new_value, (str, unicode)):
+                raise ValueError("Invalid string")
+        else:
+            raise NotImplementedError("Type `{}` not implemented".format(self.data_type))
+
+        self.raw_value = json.dumps(new_value)
+
+    def __unicode__(self):
+        if self.app_setting:
+            return u"{}: {}".format(self.device_id, self.app_setting.slug)
+        else:
+            return unicode(self.device_id)
+
+    class Meta:
+        unique_together = ('app_setting', 'device')
