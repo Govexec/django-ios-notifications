@@ -13,7 +13,10 @@
     <div>
         The message:
         <pre>{{ notification.message }}</pre>
-        {% if sent %}was sent to {{ num_devices }} device{% ifnotequal num_devices 1 %}s{% endifnotequal %}{% endif %}
+        {% if sent %}
+            was sent to {{ permitted_devices }} device{% ifnotequal num_devices 1 %}s{% endifnotequal %}
+            out of {{ available_devices }} active devices.
+        {% endif %}
     </div>
 </div>
 {% endblock %}

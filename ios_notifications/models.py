@@ -21,7 +21,7 @@ import OpenSSL
 
 from .exceptions import NotificationPayloadSizeExceeded, InvalidPassPhrase
 
-from apnsclient import *
+from apns_clerk import *
 from raven import Client
 
 def chunks(l, n):
@@ -92,6 +92,54 @@ class APNService(BaseService):
     PORT = 2195
     fmt = '!cH32sH%ds'
 
+    @cached_property
+    def news_alerts_setting(self):
+        try:
+            return self.settings.get(slug="enabled_news_alerts")
+        except AppSetting.DoesNotExist:
+            return None
+
+    @cached_property
+    def digest_alerts_setting(self):
+        try:
+            return self.settings.get(slug="enabled_digest_alerts")
+        except AppSetting.DoesNotExist:
+            return None
+
+    @cached_property
+    def has_news_alerts_setting(self):
+        return self.news_alerts_setting is not None
+
+    @cached_property
+    def has_digest_alerts_setting(self):
+        return self.digest_alerts_setting is not None
+
+    def available_devices(self):
+        return self.device_set.filter(is_active=True)
+
+    def permitted_devices(self, notification):
+        devices = self.available_devices()
+
+        # Reduce list to opted in users
+        if notification.has_article and self.has_news_alerts_setting:
+            enabled_permissions = (
+                self.news_alerts_setting.
+                    device_settings.
+                    filter(raw_value="true")
+            )
+
+            devices = devices.filter(settings__in=enabled_permissions)
+        elif notification.has_digest and self.has_digest_alerts_setting:
+            enabled_permissions = (
+                self.digest_alerts_setting.
+                    device_settings.
+                    filter(raw_value="true")
+            )
+
+            devices = devices.filter(settings__in=enabled_permissions)
+
+        return devices
+
     def _connect(self):
         """
         Establishes an encrypted SSL socket connection to the service.
@@ -106,7 +154,7 @@ class APNService(BaseService):
         list will be sent the notification.
         """
         if devices is None:
-            devices = self.device_set.filter(is_active=True)
+            devices = self.permitted_devices(notification)
 
         """
         Modified Push Process
@@ -292,6 +340,14 @@ class Notification(models.Model):
         return u'%s%s%s' % (self.message, ' ' if self.message and self.custom_payload else '', self.custom_payload)
 
     @property
+    def has_article(self):
+        return self.extra and "article_id" in self.extra
+
+    @property
+    def has_digest(self):
+        return self.extra and "issue_id" in self.extra
+
+    @property
     def extra(self):
         """
         The extra property is used to specify custom payload values
@@ -463,7 +519,7 @@ class AppSetting(models.Model):
         (DATA_TYPE_STRING, 'String'),
     )
 
-    service = models.ForeignKey(APNService)
+    service = models.ForeignKey(APNService, related_name="settings")
     slug = models.SlugField(max_length=100)
     data_type = models.CharField(max_length=30, choices=DATA_TYPE_CHOICES)
 
@@ -485,7 +541,7 @@ class DeviceSetting(models.Model):
     VALID_TRUE_VALUES = ["true", "1", "yes"]
     VALID_FALSE_VALUES = ["false", "0", "no"]
 
-    app_setting = models.ForeignKey(AppSetting)
+    app_setting = models.ForeignKey(AppSetting, related_name="device_settings")
     device = models.ForeignKey(Device, related_name="settings")
     raw_value = models.CharField(max_length=500)
 
