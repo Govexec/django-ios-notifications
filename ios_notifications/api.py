@@ -68,7 +68,10 @@ class DeviceResource(BaseResource):
         Creates a new device or updates an existing one to `is_active=True`.
         Expects two non-options POST parameters: `token` and `service`.
         """
-        post_data = json.loads(request.body)
+        try:
+            post_data = json.loads(request.body)
+        except ValueError as e:
+            post_data = request.POST
 
         token = post_data.get('token')
         if token is not None:
