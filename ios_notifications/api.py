@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import json
 import re
 
 from django.http import HttpResponseNotAllowed, QueryDict
@@ -67,34 +68,48 @@ class DeviceResource(BaseResource):
         Creates a new device or updates an existing one to `is_active=True`.
         Expects two non-options POST parameters: `token` and `service`.
         """
-        token = request.POST.get('token')
+        post_data = json.loads(request.body)
+
+        token = post_data.get('token')
         if token is not None:
             # Strip out any special characters that may be in the token
             token = re.sub('<|>|\s', '', token)
         devices = Device.objects.filter(token=token,
-                                        service__id=int(request.POST.get('service', 0)))
+                                        service__id=int(post_data.get('service', 0)))
+
+
         if devices.exists():
             device = devices.get()
             device.is_active = True
 
             #conditionally set other data
-            device.platform = request.POST.get("platform", None)
-            device.display = request.POST.get("display", None)
-            device.os_version = request.POST.get("os_version", None)
+            device.platform = post_data.get("platform", None)
+            device.display = post_data.get("display", None)
+            device.os_version = post_data.get("os_version", None)
             
             device.save()
+
+            new_settings = post_data.get("settings", None)
+            if new_settings:
+                device.update_device_settings(new_settings)
+
             return JSONResponse(device)
-        form = DeviceForm(request.POST)
+        form = DeviceForm(post_data)
         if form.is_valid():
             device = form.save(commit=False)
             device.is_active = True
 
             #conditionally set other data
-            device.platform = request.POST.get("platform", None)
-            device.display = request.POST.get("display", None)
-            device.os_version = request.POST.get("os_version", None)
+            device.platform = post_data.get("platform", None)
+            device.display = post_data.get("display", None)
+            device.os_version = post_data.get("os_version", None)
 
             device.save()
+
+            new_settings = post_data.get("settings", None)
+            if new_settings:
+                device.update_device_settings(new_settings)
+
             return JSONResponse(device, status=201)
         return JSONResponse(form.errors, status=400)
 
