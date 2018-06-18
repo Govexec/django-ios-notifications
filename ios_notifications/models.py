@@ -22,14 +22,16 @@ import OpenSSL
 from .exceptions import NotificationPayloadSizeExceeded, InvalidPassPhrase
 
 from apns_clerk import *
-from raven import Client
+from raven.contrib.django.raven_compat.models import client as raven_client
+
 
 def chunks(l, n):
     """
     Yield successive n-sized chunks from l.
     """
     for i in xrange(0, len(l), n):
-        yield l[i:i+n]
+        yield l[i:i + n]
+
 
 class BaseService(models.Model):
     """
@@ -192,8 +194,9 @@ class APNService(BaseService):
             code, errmsg = reason
 
             # Log with sentry
-            client = Client(dsn=settings.RAVEN_CONFIG['dsn'])
-            client.captureMessage("APNs Failure - Reason:%s - Device:%s" % (errmsg, token))
+            raven_client.captureMessage(
+                "APNs Failure - Reason:%s - Device:%s" % (errmsg, token)
+            )
 
             # Disable device
             for device in devices:
@@ -209,8 +212,7 @@ class APNService(BaseService):
         for code, errmsg in res.errors:
 
             # Log with sentry
-            client = Client(dsn=settings.RAVEN_CONFIG['dsn'])
-            client.captureMessage("APNs Failure - Error:%s" % errmsg)
+            raven_client.captureMessage("APNs Failure - Error:%s" % errmsg)
 
             print "Error: ", errmsg
 
@@ -294,10 +296,9 @@ class APNService(BaseService):
             Device.objects.filter(pk__in=[d.pk for d in devices]).update(last_notified_at=dt_now())
         except:
             # catchall for deadlock; should not occur, but notifications are too important to be allowed to fail\
-            client = Client(dsn=settings.RAVEN_CONFIG['dsn'])
             try:
                 exc_info = sys.exc_info()
-                client.captureException(exc_info)
+                raven_client.captureException(exc_info)
             finally:
                 del exc_info
 
@@ -439,8 +440,7 @@ class Device(models.Model):
                     setting = DeviceSetting()
                     setting.app_setting = app_setting
                 except AppSetting.DoesNotExist:
-                    client = Client(dsn=settings.RAVEN_CONFIG['dsn'])
-                    client.captureMessage(
+                    raven_client.captureMessage(
                         "Invalid setting.  Does not exist for this app.",
                         extra={
                             "token": self.token,
